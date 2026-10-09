@@ -229,6 +229,8 @@ jobs:
               private int playToken;
               private Stroke cur;
               private long curStart;
+              private String recNote = "Kaydediliyor… dokun";
+              private int playFail;
 
               @Override
               protected void onServiceConnected() {
@@ -368,9 +370,9 @@ jobs:
                   btnPlay.setText(playing ? "■ Dur" : "▶ Oynat");
                   btnLoop.setText(loop ? "∞ Açık" : "∞ Kapalı");
                   if (recording) {
-                      status.setText("Kaydediliyor… ekrana dokun (" + strokes.size() + ")");
+                      status.setText(recNote + " (" + strokes.size() + ")");
                   } else if (playing) {
-                      status.setText("Oynatılıyor…");
+                      status.setText("Oynatılıyor…" + (playFail > 0 ? " hata: " + playFail : ""));
                   } else {
                       status.setText(strokes.size() + " dokunuş kayıtlı");
                   }
@@ -394,6 +396,7 @@ jobs:
                   strokes.clear();
                   cur = null;
                   recording = true;
+                  recNote = "Kaydediliyor… dokun";
                   recStart = SystemClock.uptimeMillis();
 
                   capture = new View(this) {
@@ -476,20 +479,35 @@ jobs:
               }
 
               // Kayıt sırasında dokunuş altındaki uygulamaya da ulaşsın diye tekrar gönderilir.
-              private void passThrough(Stroke s) {
+              // Önce kayıt penceresi dokunmaya kapatılır; sistem bunu uygulayana kadar
+              // kısa bir süre beklenir, yoksa gönderilen dokunuş yine bizim pencereye çarpar.
+              private void passThrough(final Stroke s) {
+                  recNote = "Uygulamaya gönderiliyor, bekle…";
+                  refresh();
                   setCaptureTouchable(false);
-                  boolean ok = dispatch(s, new GestureResultCallback() {
-                      @Override
-                      public void onCompleted(GestureDescription gestureDescription) {
-                          setCaptureTouchable(true);
-                      }
+                  h.postDelayed(() -> {
+                      if (!recording || capture == null) return;
+                      boolean ok = dispatch(s, new GestureResultCallback() {
+                          @Override
+                          public void onCompleted(GestureDescription gestureDescription) {
+                              recNote = "Hazır ✓ sonraki dokunuşu yap";
+                              setCaptureTouchable(true);
+                              refresh();
+                          }
 
-                      @Override
-                      public void onCancelled(GestureDescription gestureDescription) {
+                          @Override
+                          public void onCancelled(GestureDescription gestureDescription) {
+                              recNote = "Dokunuş iptal oldu ✗";
+                              setCaptureTouchable(true);
+                              refresh();
+                          }
+                      });
+                      if (!ok) {
+                          recNote = "Gönderilemedi ✗ (erişilebilirlik izni?)";
                           setCaptureTouchable(true);
+                          refresh();
                       }
-                  });
-                  if (!ok) setCaptureTouchable(true);
+                  }, 90);
               }
 
               // -------------------------------------------------------------- playing
@@ -521,6 +539,7 @@ jobs:
                       return;
                   }
                   playing = true;
+                  playFail = 0;
                   refresh();
                   runOnce(++playToken);
               }
@@ -530,7 +549,18 @@ jobs:
                   for (final Stroke s : strokes) {
                       end = Math.max(end, s.offset + s.duration);
                       h.postDelayed(() -> {
-                          if (playing && token == playToken) dispatch(s, null);
+                          if (!(playing && token == playToken)) return;
+                          boolean ok = dispatch(s, new GestureResultCallback() {
+                              @Override
+                              public void onCancelled(GestureDescription gestureDescription) {
+                                  playFail++;
+                                  refresh();
+                              }
+                          });
+                          if (!ok) {
+                              playFail++;
+                              refresh();
+                          }
                       }, s.offset);
                   }
                   h.postDelayed(() -> {
