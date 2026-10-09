@@ -1,0 +1,606 @@
+name: Touch Recorder APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
+
+      - name: Android SDK 34
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" || true
+
+      - name: Proje dosyalarini olustur
+        run: |
+          mkdir -p app/src/main/java/com/example/touchrec app/src/main/res/values app/src/main/res/xml
+          cat > settings.gradle <<'EOF_FILE_0'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "TouchRecorder"
+          include ':app'
+          EOF_FILE_0
+          cat > build.gradle <<'EOF_FILE_1'
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+          }
+          EOF_FILE_1
+          cat > app/build.gradle <<'EOF_FILE_2'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.example.touchrec'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.example.touchrec'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+          }
+          EOF_FILE_2
+          cat > app/src/main/AndroidManifest.xml <<'EOF_FILE_3'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"> <application android:label="@string/app_name" android:theme="@android:style/Theme.DeviceDefault.Light"> <activity android:name=".MainActivity" android:exported="true"> <intent-filter> <action android:name="android.intent.action.MAIN" /> <category android:name="android.intent.category.LAUNCHER" /> </intent-filter> </activity> <service android:name=".TouchService" android:exported="true" android:label="@string/app_name" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"> <intent-filter> <action android:name="android.accessibilityservice.AccessibilityService" /> </intent-filter> <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_config" /> </service> </application> </manifest>
+          EOF_FILE_3
+          cat > app/src/main/res/values/strings.xml <<'EOF_FILE_4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources> <string name="app_name">Touch Recorder</string> <string name="service_desc">Ekrandaki dokunuşları kaydedip tekrar oynatmak için gereklidir.</string> </resources>
+          EOF_FILE_4
+          cat > app/src/main/res/xml/accessibility_config.xml <<'EOF_FILE_5'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeAllMask" android:accessibilityFeedbackType="feedbackGeneric" android:canPerformGestures="true" android:description="@string/service_desc" android:notificationTimeout="100" />
+          EOF_FILE_5
+          cat > app/src/main/java/com/example/touchrec/MainActivity.java <<'EOF_FILE_6'
+          package com.example.touchrec;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+
+          public class MainActivity extends Activity {
+              private TextView state;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  ScrollView sv = new ScrollView(this);
+                  LinearLayout l = new LinearLayout(this);
+                  l.setOrientation(LinearLayout.VERTICAL);
+                  l.setPadding(48, 48, 48, 48);
+                  sv.addView(l);
+
+                  TextView title = new TextView(this);
+                  title.setText("Touch Recorder");
+                  title.setTextSize(28);
+                  l.addView(title);
+
+                  state = new TextView(this);
+                  state.setTextSize(18);
+                  state.setPadding(0, 32, 0, 32);
+                  l.addView(state);
+
+                  TextView info = new TextView(this);
+                  info.setTextSize(16);
+                  info.setText(
+                      "Kurulum:\n\n"
+                    + "1) Aşağıdaki \"Uygulama bilgisi\" düğmesine bas, sağ üstteki ⋮ menüsünden "
+                    + "\"Kısıtlanmış ayarlara izin ver\" seçeneği varsa seç.\n\n"
+                    + "2) \"Erişilebilirlik ayarlarını aç\" düğmesine bas, listeden Touch Recorder'ı "
+                    + "bul, aç ve izin ver.\n\n"
+                    + "3) Ekranda küçük bir panel belirir:\n"
+                    + "• ● Kaydet: dokunuşlarını kaydetmeye başlar (ekran hafif kırmızı olur)\n"
+                    + "• ■ Bitir: kaydı durdurur\n"
+                    + "• ▶ Oynat: kaydı tekrar oynatır\n"
+                    + "• ∞: sürekli tekrar aç/kapat\n"
+                    + "• Sil: kaydı siler\n"
+                    + "• Taşı: paneli sürükler\n"
+                    + "• ✕: servisi kapatır\n\n"
+                    + "Not: Kayıt sırasında dokunuşların uygulamaya biraz gecikmeyle ulaşır, "
+                    + "çünkü parmağını kaldırınca tekrar gönderilir. Sadece tek parmak kaydedilir.");
+                  l.addView(info);
+
+                  Button b2 = new Button(this);
+                  b2.setText("Uygulama bilgisi (kısıtlı ayar izni)");
+                  b2.setOnClickListener(v -> {
+                      Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                              Uri.parse("package:" + getPackageName()));
+                      startActivity(i);
+                  });
+                  l.addView(b2);
+
+                  Button b1 = new Button(this);
+                  b1.setText("Erişilebilirlik ayarlarını aç");
+                  b1.setOnClickListener(v ->
+                      startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+                  l.addView(b1);
+
+                  setContentView(sv);
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  state.setText(TouchService.running
+                      ? "Durum: AÇIK ✔ (panel ekranda olmalı)"
+                      : "Durum: KAPALI — erişilebilirlikten izin ver");
+              }
+          }
+          EOF_FILE_6
+          cat > app/src/main/java/com/example/touchrec/TouchService.java <<'EOF_FILE_7'
+          package com.example.touchrec;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.accessibilityservice.GestureDescription;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.graphics.Color;
+          import android.graphics.Path;
+          import android.graphics.PixelFormat;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.os.SystemClock;
+          import android.view.ContextThemeWrapper;
+          import android.view.Gravity;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.view.accessibility.AccessibilityEvent;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          import java.util.ArrayList;
+
+          public class TouchService extends AccessibilityService {
+              static boolean running = false;
+
+              static class Stroke {
+                  long offset;    // kayıt başlangıcından itibaren ms
+                  long duration;  // ms
+                  ArrayList<float[]> pts = new ArrayList<>();
+              }
+
+              private WindowManager wm;
+              private Context ui;
+              private final Handler h = new Handler(Looper.getMainLooper());
+              private final ArrayList<Stroke> strokes = new ArrayList<>();
+
+              private LinearLayout panel;
+              private WindowManager.LayoutParams panelLp;
+              private View capture;
+              private WindowManager.LayoutParams captureLp;
+              private TextView status;
+              private Button btnRec, btnPlay, btnLoop;
+
+              private boolean recording, playing, loop;
+              private long recStart;
+              private int playToken;
+              private Stroke cur;
+              private long curStart;
+
+              @Override
+              protected void onServiceConnected() {
+                  super.onServiceConnected();
+                  running = true;
+                  if (panel != null) return;
+                  wm = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
+                  ui = new ContextThemeWrapper(this, android.R.style.Theme_DeviceDefault);
+                  load();
+                  buildPanel();
+                  refresh();
+              }
+
+              @Override
+              public void onAccessibilityEvent(AccessibilityEvent event) { }
+
+              @Override
+              public void onInterrupt() { }
+
+              @Override
+              public boolean onUnbind(Intent intent) {
+                  cleanup();
+                  return super.onUnbind(intent);
+              }
+
+              @Override
+              public void onDestroy() {
+                  cleanup();
+                  super.onDestroy();
+              }
+
+              private void cleanup() {
+                  running = false;
+                  playing = false;
+                  recording = false;
+                  playToken++;
+                  h.removeCallbacksAndMessages(null);
+                  try { if (capture != null) wm.removeView(capture); } catch (Exception ignored) { }
+                  try { if (panel != null) wm.removeView(panel); } catch (Exception ignored) { }
+                  capture = null;
+                  panel = null;
+              }
+
+              // ---------------------------------------------------------------- panel
+
+              private Button mk(String text, View.OnClickListener l) {
+                  Button b = new Button(ui);
+                  b.setAllCaps(false);
+                  b.setText(text);
+                  b.setTextSize(14);
+                  b.setMinWidth(0);
+                  b.setMinimumWidth(0);
+                  b.setOnClickListener(l);
+                  return b;
+              }
+
+              private void buildPanel() {
+                  panelLp = new WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                  | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                          PixelFormat.TRANSLUCENT);
+                  panelLp.gravity = Gravity.TOP | Gravity.START;
+                  panelLp.x = 40;
+                  panelLp.y = 120;
+
+                  panel = new LinearLayout(ui);
+                  panel.setOrientation(LinearLayout.VERTICAL);
+                  GradientDrawable bg = new GradientDrawable();
+                  bg.setColor(0xDD202124);
+                  bg.setCornerRadius(28f);
+                  panel.setBackground(bg);
+                  panel.setPadding(16, 12, 16, 12);
+
+                  status = new TextView(ui);
+                  status.setTextColor(Color.WHITE);
+                  status.setTextSize(13);
+                  status.setGravity(Gravity.CENTER);
+                  panel.addView(status);
+
+                  LinearLayout row = new LinearLayout(ui);
+                  row.setOrientation(LinearLayout.HORIZONTAL);
+                  row.setGravity(Gravity.CENTER_VERTICAL);
+
+                  TextView handle = new TextView(ui);
+                  handle.setText("Taşı");
+                  handle.setTextColor(0xFF8AB4F8);
+                  handle.setTextSize(14);
+                  handle.setPadding(20, 20, 20, 20);
+                  final int[] st = new int[4];
+                  handle.setOnTouchListener((v, e) -> {
+                      switch (e.getActionMasked()) {
+                          case MotionEvent.ACTION_DOWN:
+                              st[0] = panelLp.x;
+                              st[1] = panelLp.y;
+                              st[2] = (int) e.getRawX();
+                              st[3] = (int) e.getRawY();
+                              return true;
+                          case MotionEvent.ACTION_MOVE:
+                              panelLp.x = st[0] + (int) e.getRawX() - st[2];
+                              panelLp.y = st[1] + (int) e.getRawY() - st[3];
+                              try { wm.updateViewLayout(panel, panelLp); } catch (Exception ignored) { }
+                              return true;
+                          default:
+                              return true;
+                      }
+                  });
+                  row.addView(handle);
+
+                  btnRec = mk("", v -> toggleRecord());
+                  btnPlay = mk("", v -> togglePlay());
+                  btnLoop = mk("", v -> { loop = !loop; refresh(); });
+                  Button btnClear = mk("Sil", v -> {
+                      if (recording) return;
+                      stopPlay();
+                      strokes.clear();
+                      save();
+                      refresh();
+                  });
+                  Button btnClose = mk("✕", v -> disableSelf());
+
+                  row.addView(btnRec);
+                  row.addView(btnPlay);
+                  row.addView(btnLoop);
+                  row.addView(btnClear);
+                  row.addView(btnClose);
+                  panel.addView(row);
+
+                  wm.addView(panel, panelLp);
+              }
+
+              private void refresh() {
+                  if (panel == null) return;
+                  btnRec.setText(recording ? "■ Bitir" : "● Kaydet");
+                  btnPlay.setText(playing ? "■ Dur" : "▶ Oynat");
+                  btnLoop.setText(loop ? "∞ Açık" : "∞ Kapalı");
+                  if (recording) {
+                      status.setText("Kaydediliyor… ekrana dokun (" + strokes.size() + ")");
+                  } else if (playing) {
+                      status.setText("Oynatılıyor…");
+                  } else {
+                      status.setText(strokes.size() + " dokunuş kayıtlı");
+                  }
+              }
+
+              private void bringPanelFront() {
+                  try {
+                      wm.removeView(panel);
+                      wm.addView(panel, panelLp);
+                  } catch (Exception ignored) { }
+              }
+
+              // ------------------------------------------------------------ recording
+
+              private void toggleRecord() {
+                  if (recording) stopRecord(); else startRecord();
+              }
+
+              private void startRecord() {
+                  stopPlay();
+                  strokes.clear();
+                  cur = null;
+                  recording = true;
+                  recStart = SystemClock.uptimeMillis();
+
+                  capture = new View(this) {
+                      @Override
+                      public boolean onTouchEvent(MotionEvent e) {
+                          handleTouch(e);
+                          return true;
+                      }
+                  };
+                  capture.setBackgroundColor(0x22FF0000);
+                  captureLp = new WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.MATCH_PARENT,
+                          WindowManager.LayoutParams.MATCH_PARENT,
+                          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                  | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                  | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                          PixelFormat.TRANSLUCENT);
+                  captureLp.gravity = Gravity.TOP | Gravity.START;
+                  wm.addView(capture, captureLp);
+                  bringPanelFront();
+                  refresh();
+              }
+
+              private void stopRecord() {
+                  recording = false;
+                  cur = null;
+                  try { if (capture != null) wm.removeView(capture); } catch (Exception ignored) { }
+                  capture = null;
+                  save();
+                  refresh();
+              }
+
+              private void handleTouch(MotionEvent e) {
+                  switch (e.getActionMasked()) {
+                      case MotionEvent.ACTION_DOWN: {
+                          cur = new Stroke();
+                          curStart = e.getEventTime();
+                          cur.offset = curStart - recStart;
+                          cur.pts.add(new float[]{e.getRawX(), e.getRawY()});
+                          break;
+                      }
+                      case MotionEvent.ACTION_MOVE: {
+                          if (cur == null) break;
+                          float[] last = cur.pts.get(cur.pts.size() - 1);
+                          float dx = e.getRawX() - last[0];
+                          float dy = e.getRawY() - last[1];
+                          if (dx * dx + dy * dy >= 9f) {
+                              cur.pts.add(new float[]{e.getRawX(), e.getRawY()});
+                          }
+                          break;
+                      }
+                      case MotionEvent.ACTION_UP: {
+                          if (cur == null) break;
+                          cur.pts.add(new float[]{e.getRawX(), e.getRawY()});
+                          cur.duration = Math.max(e.getEventTime() - curStart, 20);
+                          final Stroke s = cur;
+                          cur = null;
+                          strokes.add(s);
+                          refresh();
+                          passThrough(s);
+                          break;
+                      }
+                      case MotionEvent.ACTION_CANCEL:
+                          cur = null;
+                          break;
+                      default:
+                          break;
+                  }
+              }
+
+              private void setCaptureTouchable(boolean touchable) {
+                  if (capture == null) return;
+                  if (touchable) {
+                      captureLp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                  } else {
+                      captureLp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                  }
+                  try { wm.updateViewLayout(capture, captureLp); } catch (Exception ignored) { }
+              }
+
+              // Kayıt sırasında dokunuş altındaki uygulamaya da ulaşsın diye tekrar gönderilir.
+              private void passThrough(Stroke s) {
+                  setCaptureTouchable(false);
+                  boolean ok = dispatch(s, new GestureResultCallback() {
+                      @Override
+                      public void onCompleted(GestureDescription gestureDescription) {
+                          setCaptureTouchable(true);
+                      }
+
+                      @Override
+                      public void onCancelled(GestureDescription gestureDescription) {
+                          setCaptureTouchable(true);
+                      }
+                  });
+                  if (!ok) setCaptureTouchable(true);
+              }
+
+              // -------------------------------------------------------------- playing
+
+              private boolean dispatch(Stroke s, GestureResultCallback cb) {
+                  if (s.pts.isEmpty()) return false;
+                  Path p = new Path();
+                  float[] f = s.pts.get(0);
+                  p.moveTo(f[0], f[1]);
+                  for (int i = 1; i < s.pts.size(); i++) {
+                      float[] q = s.pts.get(i);
+                      p.lineTo(q[0], q[1]);
+                  }
+                  long dur = Math.max(1, Math.min(s.duration, GestureDescription.getMaxGestureDuration()));
+                  GestureDescription.Builder b = new GestureDescription.Builder();
+                  b.addStroke(new GestureDescription.StrokeDescription(p, 0, dur));
+                  return dispatchGesture(b.build(), cb, null);
+              }
+
+              private void togglePlay() {
+                  if (playing) {
+                      stopPlay();
+                      refresh();
+                      return;
+                  }
+                  if (recording) return;
+                  if (strokes.isEmpty()) {
+                      Toast.makeText(this, "Önce bir kayıt yap", Toast.LENGTH_SHORT).show();
+                      return;
+                  }
+                  playing = true;
+                  refresh();
+                  runOnce(++playToken);
+              }
+
+              private void runOnce(final int token) {
+                  long end = 0;
+                  for (final Stroke s : strokes) {
+                      end = Math.max(end, s.offset + s.duration);
+                      h.postDelayed(() -> {
+                          if (playing && token == playToken) dispatch(s, null);
+                      }, s.offset);
+                  }
+                  h.postDelayed(() -> {
+                      if (!playing || token != playToken) return;
+                      if (loop) {
+                          runOnce(token);
+                      } else {
+                          stopPlay();
+                          refresh();
+                      }
+                  }, end + 300);
+              }
+
+              private void stopPlay() {
+                  playing = false;
+                  playToken++;
+                  h.removeCallbacksAndMessages(null);
+              }
+
+              // ---------------------------------------------------------- persistence
+
+              private void save() {
+                  try {
+                      JSONArray arr = new JSONArray();
+                      for (Stroke s : strokes) {
+                          JSONObject o = new JSONObject();
+                          o.put("o", s.offset);
+                          o.put("d", s.duration);
+                          JSONArray pts = new JSONArray();
+                          for (float[] p : s.pts) {
+                              JSONArray xy = new JSONArray();
+                              xy.put((double) p[0]);
+                              xy.put((double) p[1]);
+                              pts.put(xy);
+                          }
+                          o.put("p", pts);
+                          arr.put(o);
+                      }
+                      getSharedPreferences("rec", MODE_PRIVATE).edit()
+                              .putString("data", arr.toString()).apply();
+                  } catch (Exception ignored) { }
+              }
+
+              private void load() {
+                  strokes.clear();
+                  try {
+                      SharedPreferences sp = getSharedPreferences("rec", MODE_PRIVATE);
+                      JSONArray arr = new JSONArray(sp.getString("data", "[]"));
+                      for (int i = 0; i < arr.length(); i++) {
+                          JSONObject o = arr.getJSONObject(i);
+                          Stroke s = new Stroke();
+                          s.offset = o.getLong("o");
+                          s.duration = o.getLong("d");
+                          JSONArray pts = o.getJSONArray("p");
+                          for (int j = 0; j < pts.length(); j++) {
+                              JSONArray xy = pts.getJSONArray(j);
+                              s.pts.add(new float[]{(float) xy.getDouble(0), (float) xy.getDouble(1)});
+                          }
+                          strokes.add(s);
+                      }
+                  } catch (Exception ignored) { }
+              }
+          }
+          EOF_FILE_7
+
+      - name: APK derle
+        run: gradle assembleDebug --no-daemon
+
+      - name: Release olarak yayinla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ github.run_number }}" app/build/outputs/apk/debug/app-debug.apk --title "Touch Recorder v${{ github.run_number }}" --notes "Debug APK"
