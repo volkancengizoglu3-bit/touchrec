@@ -231,6 +231,8 @@ jobs:
               private long curStart;
               private String recNote = "Kaydediliyor… dokun";
               private int playFail;
+              private TextView dbg;
+              private int evD, evM, evU, evC, sent, sentOk, sentCancel, sentFail;
 
               @Override
               protected void onServiceConnected() {
@@ -313,6 +315,12 @@ jobs:
                   status.setGravity(Gravity.CENTER);
                   panel.addView(status);
 
+                  dbg = new TextView(ui);
+                  dbg.setTextColor(0xFFAAAAAA);
+                  dbg.setTextSize(11);
+                  dbg.setGravity(Gravity.CENTER);
+                  panel.addView(dbg);
+
                   LinearLayout row = new LinearLayout(ui);
                   row.setOrientation(LinearLayout.HORIZONTAL);
                   row.setGravity(Gravity.CENTER_VERTICAL);
@@ -369,6 +377,9 @@ jobs:
                   btnRec.setText(recording ? "■ Bitir" : "● Kaydet");
                   btnPlay.setText(playing ? "■ Dur" : "▶ Oynat");
                   btnLoop.setText(loop ? "∞ Açık" : "∞ Kapalı");
+                  dbg.setText("alınan D:" + evD + " M:" + evM + " U:" + evU + " C:" + evC
+                          + " | gönder:" + sent + " ok:" + sentOk
+                          + " iptal:" + sentCancel + " hata:" + sentFail);
                   if (recording) {
                       status.setText(recNote + " (" + strokes.size() + ")");
                   } else if (playing) {
@@ -397,7 +408,9 @@ jobs:
                   cur = null;
                   recording = true;
                   recNote = "Kaydediliyor… dokun";
+                  evD = evM = evU = evC = sent = sentOk = sentCancel = sentFail = 0;
                   recStart = SystemClock.uptimeMillis();
+                  Toast.makeText(this, "Kayıt başladı: ekrana dokun", Toast.LENGTH_SHORT).show();
 
                   capture = new View(this) {
                       @Override
@@ -433,6 +446,8 @@ jobs:
               private void handleTouch(MotionEvent e) {
                   switch (e.getActionMasked()) {
                       case MotionEvent.ACTION_DOWN: {
+                          evD++;
+                          refresh();
                           cur = new Stroke();
                           curStart = e.getEventTime();
                           cur.offset = curStart - recStart;
@@ -440,6 +455,7 @@ jobs:
                           break;
                       }
                       case MotionEvent.ACTION_MOVE: {
+                          evM++;
                           if (cur == null) break;
                           float[] last = cur.pts.get(cur.pts.size() - 1);
                           float dx = e.getRawX() - last[0];
@@ -450,6 +466,7 @@ jobs:
                           break;
                       }
                       case MotionEvent.ACTION_UP: {
+                          evU++;
                           if (cur == null) break;
                           cur.pts.add(new float[]{e.getRawX(), e.getRawY()});
                           cur.duration = Math.max(e.getEventTime() - curStart, 20);
@@ -461,7 +478,9 @@ jobs:
                           break;
                       }
                       case MotionEvent.ACTION_CANCEL:
+                          evC++;
                           cur = null;
+                          refresh();
                           break;
                       default:
                           break;
@@ -487,9 +506,11 @@ jobs:
                   setCaptureTouchable(false);
                   h.postDelayed(() -> {
                       if (!recording || capture == null) return;
+                      sent++;
                       boolean ok = dispatch(s, new GestureResultCallback() {
                           @Override
                           public void onCompleted(GestureDescription gestureDescription) {
+                              sentOk++;
                               recNote = "Hazır ✓ sonraki dokunuşu yap";
                               setCaptureTouchable(true);
                               refresh();
@@ -497,12 +518,14 @@ jobs:
 
                           @Override
                           public void onCancelled(GestureDescription gestureDescription) {
+                              sentCancel++;
                               recNote = "Dokunuş iptal oldu ✗";
                               setCaptureTouchable(true);
                               refresh();
                           }
                       });
                       if (!ok) {
+                          sentFail++;
                           recNote = "Gönderilemedi ✗ (erişilebilirlik izni?)";
                           setCaptureTouchable(true);
                           refresh();
